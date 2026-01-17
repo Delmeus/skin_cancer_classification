@@ -1,156 +1,234 @@
-import matplotlib.pyplot as plt
+import os
+import numpy as np
 import pandas as pd
 import torch
-import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+import torchvision.models as models
+import matplotlib.pyplot as plt
+import csv
+
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
-    f1_score, accuracy_score, precision_score, recall_score, balanced_accuracy_score
+    f1_score, accuracy_score, precision_score,
+    recall_score, balanced_accuracy_score
 )
 from imblearn.metrics import geometric_mean_score, specificity_score
+from math import pi
+
 from utils.ImageDataset import ImageDataset
-from scipy.ndimage import gaussian_filter1d
-import torchvision.models as models
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-score_names = ["F1", "Czułość", "Precyzja", "Dokładność", "Zbalansowana dokładność", "Średnia geometryczna", "Swoistość"]
+# =====================
+# CONFIG
+# =====================
+BALANCED = False
+EPOCHS = 10
+BATCH_SIZE = 32
+LR = 1e-3
+RESULTS_DIR = "results/resnet_imb"
 
-def plot_batch_scores(batch_scores, data_loader, batch_number):
-    fig, axes = plt.subplots(nrows=4, ncols=2, figsize=(10, 12))
-    axes = axes.ravel()
-    metric_keys = ["f1", "rec", "prec", "acc", "bac", "gmean", "spec"]
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    for i, metric in enumerate(metric_keys):
-        axes[i].plot(gaussian_filter1d(batch_scores[metric], 2), marker='None', label=metric)
-        axes[i].set_ylim(0, 1)
-        axes[i].set_xlim(0, 200)
-        axes[i].set_title(score_names[i])
-        axes[i].set_xlabel('Blok danych')
-        axes[i].set_ylabel('Średni wynik')
-        axes[i].grid(True)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    imbalance_levels = []
-    for i, (X_chunk, y_chunk) in enumerate(data_loader):
-        y_chunk_np = y_chunk.numpy()
-        sick_percentage = np.sum(y_chunk_np == 1) / len(y_chunk_np)
-        imbalance_levels.append(sick_percentage)
+# =====================
+# METRICS
+# =====================
+metric_names = ["F1", "REC", "PREC", "ACC", "BAC", "GMEAN", "SPEC"]
+all_scores = {k: [] for k in metric_names}
 
-    imbalance_levels = np.array(imbalance_levels) * 100
-    axes[7].plot(gaussian_filter1d(imbalance_levels, 1), color='r')
-    axes[7].set_title("Strumień danych")
-    axes[7].set_xlabel('Blok danych')
-    axes[7].set_ylabel('Stopień niezbalansowania')
-    axes[7].grid(True)
-
-    plt.tight_layout()
-    plt.savefig(f"results/e2//batch{batch_number}_scores.png")
-    plt.show()
-
-def get_scores(y_true, y_pred):
-    scores = {
-        "f1": f1_score(y_true, y_pred),
-        "rec": recall_score(y_true, y_pred),
-        "prec": precision_score(y_true, y_pred),
-        "acc": accuracy_score(y_true, y_pred),
-        "bac": balanced_accuracy_score(y_true, y_pred),
-        "gmean": geometric_mean_score(y_true, y_pred),
-        "spec": specificity_score(y_true, y_pred),
-    }
-    for key in batch_scores.keys():
-        batch_scores[key].append(scores[key])
-    return scores  # Return the scores dictionary
-
-
-def get_epoch_scores(scores: dict):
-    for key, score in scores.items():
-        epoch_scores[key].append(np.mean(score))
-
-
+# =====================
+# DATASET
+# =====================
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    transforms.Normalize((0.5,)*3, (0.5,)*3)
 ])
 
 labels_file = "dataset/labels.csv"
 labels_df = pd.read_csv(labels_file)
-labels = labels_df['sick'].values
-dataset = ImageDataset(img_dir='dataset/images/', labels_file=labels_file, transform=transform)
-data_loader = DataLoader(dataset, batch_size=50)
+labels = labels_df["sick"].values
 
+dataset = ImageDataset(
+    img_dir="dataset/images/",
+    labels_file=labels_file,
+    transform=transform
+)
+
+indices = np.arange(len(labels))
+
+train_idx, val_idx = train_test_split(
+    indices,
+    test_size=0.2,
+    stratify=labels,
+    random_state=42
+)
+
+train_dataset = Subset(dataset, train_idx)
+val_dataset = Subset(dataset, val_idx)
+
+# =====================
+# SAMPLING
+# =====================
+if BALANCED:
+    train_labels = labels[train_idx]
+    class_counts = np.bincount(train_labels)
+    class_weights = 1.0 / class_counts
+    sample_weights = class_weights[train_labels]
+
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        sampler=sampler
+    )
+else:
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True
+    )
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False
+)
+
+# =====================
+# MODEL
+# =====================
 model = models.resnet18(pretrained=True)
 
-for param in model.parameters():
-    param.requires_grad = False
+for p in model.parameters():
+    p.requires_grad = False
 
 model.fc = nn.Linear(model.fc.in_features, 2)
-
 model = model.to(device)
 
+# =====================
+# LOSS & OPTIMIZER
+# =====================
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.fc.parameters(), lr=0.001)
+optimizer = optim.Adam(model.fc.parameters(), lr=LR)
 
+# =====================
+# TRAINING LOOP
+# =====================
+for epoch in range(EPOCHS):
+    model.train()
+    running_loss = 0.0
 
-batch_scores = {"f1": [], "rec": [], "prec": [], "acc": [], "bac": [], "gmean": [], "spec": []}
-epoch_scores = {"f1": [], "rec": [], "prec": [], "acc": [], "bac": [], "gmean": [], "spec": []}
+    for images, targets in train_loader:
+        images, targets = images.to(device), targets.to(device)
 
-epochs_per_chunk = 1
-for test_run in range(5):
-    print(f"Test run {test_run + 1}")
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
 
-    model = models.resnet18(pretrained=True)
-    for param in model.parameters():
-        param.requires_grad = False
-    model.fc = nn.Linear(model.fc.in_features, 2)
-    model = model.to(device)
-    optimizer = optim.Adam(model.fc.parameters(), lr=0.001)
+        running_loss += loss.item()
 
-    chunk_scores = {"f1": [], "rec": [], "prec": [], "acc": [], "bac": [], "gmean": [], "spec": []}
+    avg_loss = running_loss / len(train_loader)
 
-    for chunk_idx, (chunk_images, chunk_labels) in enumerate(data_loader):
-        print(f"Processing chunk {chunk_idx + 1}/{len(data_loader)}")
+    # =====================
+    # VALIDATION
+    # =====================
+    model.eval()
+    y_true, y_pred = [], []
 
-        chunk_images, chunk_labels = chunk_images.to(device), chunk_labels.to(device)
+    with torch.no_grad():
+        for images, targets in val_loader:
+            images = images.to(device)
+            outputs = model(images)
+            preds = torch.argmax(outputs, 1).cpu().numpy()
 
-        model.eval()
-        with torch.no_grad():
-            outputs = model(chunk_images)
-            _, predicted = torch.max(outputs, 1)
-            y_true = chunk_labels.cpu().numpy()
-            y_pred = predicted.cpu().numpy()
-            scores = get_scores(y_true, y_pred)
+            y_pred.extend(preds)
+            y_true.extend(targets.numpy())
 
-            for key in chunk_scores.keys():
-                chunk_scores[key].append(scores[key])
+    # =====================
+    # METRICS
+    # =====================
+    scores = {
+        "F1": f1_score(y_true, y_pred),
+        "REC": recall_score(y_true, y_pred),
+        "PREC": precision_score(y_true, y_pred),
+        "ACC": accuracy_score(y_true, y_pred),
+        "BAC": balanced_accuracy_score(y_true, y_pred),
+        "GMEAN": geometric_mean_score(y_true, y_pred),
+        "SPEC": specificity_score(y_true, y_pred)
+    }
 
-        model.train()
-        for epoch in range(epochs_per_chunk):
-            running_loss = 0.0
-            optimizer.zero_grad()
+    for k in all_scores:
+        all_scores[k].append(scores[k])
 
-            outputs = model(chunk_images)
-            loss = criterion(outputs, chunk_labels)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
+    print(f"Epoch [{epoch+1}/{EPOCHS}] "
+          f"Loss: {avg_loss:.4f} "
+          f"F1: {scores['F1']:.3f} "
+          f"REC: {scores['REC']:.3f}")
 
-            if (epoch + 1) % 5 == 0:
-                print(f"  Epoch {epoch + 1}/{epochs_per_chunk} - Loss: {running_loss:.4f}")
+# =====================
+# RADAR CHART
+# =====================
+def plot_radar(scores, title, path):
+    labels = list(scores.keys())
+    values = list(scores.values())
+    values += values[:1]
 
-        print(f"Finished training on chunk {chunk_idx + 1}")
+    N = len(labels)
+    angles = [n / float(N) * 2 * pi for n in range(N)]
+    angles += angles[:1]
 
-    with open(f'results/e2/test_run_{test_run}.csv', 'w') as file:
-        for key in chunk_scores.keys():
-            file.write(f"{key},")
-            file.write(",".join(map(str, chunk_scores[key])))
-            file.write("\n")
-    print(f"Test run {test_run + 1} completed.")
-    plot_batch_scores(chunk_scores, data_loader, test_run)
+    plt.figure(figsize=(6,6))
+    ax = plt.subplot(111, polar=True)
+    ax.set_theta_offset(pi / 2)
+    ax.set_theta_direction(-1)
 
+    plt.xticks(angles[:-1], labels)
+    ax.set_rlabel_position(0)
+    plt.yticks(np.linspace(0,1,11), fontsize=8)
+    plt.ylim(0,1)
 
-metric_keys = ["f1", "rec", "prec", "acc", "bac", "gmean", "spec"]
+    ax.plot(angles, values, linewidth=2)
+    ax.fill(angles, values, alpha=0.25)
 
+    plt.title(title, y=1.1)
+    plt.savefig(path, dpi=200)
+    plt.show()
 
-print("Training and evaluation completed.")
+# =====================
+# FINAL RESULTS
+# =====================
+mean_scores = {k: np.mean(v) for k, v in all_scores.items()}
+
+mode = "balanced" if BALANCED else "imbalanced"
+csv_path = os.path.join(RESULTS_DIR, f"resnet_{mode}_scores.csv")
+
+with open(csv_path, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["epoch"] + metric_names)
+
+    for i in range(EPOCHS):
+        row = [i + 1] + [all_scores[m][i] for m in metric_names]
+        writer.writerow(row)
+
+print(f"Saved epoch-wise results to: {csv_path}")
+print("\n=== FINAL AVERAGE RESULTS ===")
+for k, v in mean_scores.items():
+    print(f"{k:6s}: {v:.4f}")
+
+mode = "balanced" if BALANCED else "imbalanced"
+plot_radar(
+    mean_scores,
+    title=f"ResNet18 ({mode})",
+    path=f"{RESULTS_DIR}/resnet_{mode}.png"
+)

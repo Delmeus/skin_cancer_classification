@@ -13,6 +13,8 @@ from sklearn.model_selection import RepeatedStratifiedKFold
 from imblearn.over_sampling import SMOTE, RandomOverSampler
 from imblearn.under_sampling import RandomUnderSampler, CondensedNearestNeighbour
 
+NO_SAMPLING = "imbalanced"
+
 if len(sys.argv) < 3:
     print("Not enough arguments")
     sys.exit(1)
@@ -68,49 +70,48 @@ def apply_pca(features, n_components=50):
 features = extract_hog_features(images)
 print(f"features {features.shape}")
 # Apply PCA to HOG features
-reduced_features = apply_pca(features, n_components=1000)
+reduced_features = apply_pca(features, n_components=150)
 print(f"reduced {reduced_features.shape}")
 # Combine reduced features with labels and save the dataset
 dataset = np.column_stack((reduced_features, labels))
 
 sampling = ""
+sampler = None
 X = reduced_features
 y = np.array(labels)
 path = sys.argv[1]
 print(sys.argv[2])
 if sys.argv[2] == "SMOTE":
-    print("Applying SMOTE")
-    smote = SMOTE(random_state=42)
-    X, y = smote.fit_resample(X, y)
+    # print("Applying SMOTE")
+    sampler = SMOTE(random_state=42)
+    # X, y = smote.fit_resample(X, y)
     sampling = "smote"
 elif sys.argv[2] == "ROS":
-    print("Applying ROS")
-    ros = RandomOverSampler(random_state=42)
-    X, y = ros.fit_resample(X, y)
+    # print("Applying ROS")
+    sampler = RandomOverSampler(random_state=42)
+    # X, y = ros.fit_resample(X, y)
     sampling = "ros"
 elif sys.argv[2] == "RUS":
-    print("Applying RUS")
-    rus = RandomUnderSampler(random_state=42)
-    X, y = rus.fit_resample(X, y)
+    # print("Applying RUS")
+    sampler = RandomUnderSampler(random_state=42)
+    # X, y = rus.fit_resample(X, y)
     sampling = "rus"
 elif sys.argv[2] == "CNN":
-    print("Applying CNN")
-    cnn = CondensedNearestNeighbour()
-    X, y = cnn.fit_resample(X, y)
+    # print("Applying CNN")
+    sampler = CondensedNearestNeighbour()
+    # X, y = cnn.fit_resample(X, y)
     sampling = "cnn"
 else:
-    sampling = "unbalanced"
+    sampling = NO_SAMPLING
 
-plot_class_distribution(y, folder_path=path)
-
-rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=1, random_state=36851234)
+rskf = RepeatedStratifiedKFold(n_splits=2, n_repeats=5, random_state=36851234)
 
 svm_results = ResultHelper(f"SVC_{sampling}", path)
 kNN_results = ResultHelper(f"kNN_{sampling}", path)
 nB_results = ResultHelper(f"NB_{sampling}", path)
 logistic_results = ResultHelper(f"LR_{sampling}", path)
 
-iteration = 1
+iteration = 0
 
 for train_index, test_index in rskf.split(X, y):
     print(f"iteration = {iteration}")
@@ -118,6 +119,12 @@ for train_index, test_index in rskf.split(X, y):
 
     X_train, X_test = X[train_index], X[test_index]
     y_train, y_test = y[train_index], y[test_index]
+
+    if sampling != NO_SAMPLING:
+        print(f"Applying {sampling}")
+        X_train, y_train = sampler.fit_resample(X_train, y_train)
+        if (iteration == 1):
+            plot_class_distribution(y_train, folder_path=path)
 
     print("Training SVC")
     svm_classifier = SVC(kernel='linear')
