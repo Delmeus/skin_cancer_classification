@@ -70,7 +70,7 @@ def apply_pca(features, n_components=50):
 features = extract_hog_features(images)
 print(f"features {features.shape}")
 # Apply PCA to HOG features
-reduced_features = apply_pca(features, n_components=150)
+reduced_features = apply_pca(features, n_components=600)
 print(f"reduced {reduced_features.shape}")
 # Combine reduced features with labels and save the dataset
 dataset = np.column_stack((reduced_features, labels))
