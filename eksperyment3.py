@@ -3,7 +3,7 @@ import sys
 import cv2
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
+from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier, GradientBoostingClassifier
 import os
 from utils.ResultHelper import ResultHelper, plot_class_distribution
 from sklearn.model_selection import RepeatedStratifiedKFold
@@ -67,7 +67,7 @@ def apply_pca(features, n_components=50):
 features = extract_hog_features(images)
 print(f"features {features.shape}")
 # Apply PCA to HOG features
-reduced_features = apply_pca(features, n_components=1000)
+reduced_features = apply_pca(features, n_components=600)
 print(f"reduced {reduced_features.shape}")
 # Combine reduced features with labels and save the dataset
 dataset = np.column_stack((reduced_features, labels))
@@ -90,14 +90,12 @@ elif sys.argv[2] == "CNN":
     sampler = CondensedNearestNeighbour()
     sampling = "cnn"
 
-plot_class_distribution(y, folder_path=path)
-
-rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=1, random_state=36851234)
+rskf = RepeatedStratifiedKFold(n_splits=2, n_repeats=5, random_state=36851234)
 
 ada_results = ResultHelper(f"ADA_{sampling}", path)
 wrf_results = ResultHelper(f"WRF_{sampling}", path)
 
-iteration = 1
+iteration = 0
 
 for train_index, test_index in rskf.split(X, y):
     print(f"iteration = {iteration}")
@@ -109,6 +107,8 @@ for train_index, test_index in rskf.split(X, y):
     if sampling != NO_SAMPLING:
         print(f"Applying {sampling}")
         X_train, y_train = sampler.fit_resample(X_train, y_train)
+        if iteration == 1:
+            plot_class_distribution(y_train, folder_path=path)
 
     print("Training AdaBoost")
     ada_classifier = AdaBoostClassifier()
@@ -121,12 +121,15 @@ for train_index, test_index in rskf.split(X, y):
 
     ada_results.append_all_scores(y_test, y_pred)
 
-    X_train, X_test = X[train_index], X[test_index]
-    y_train, y_test = y[train_index], y[test_index]
-
     print("Training WRF")
     weight = 20 if sampling == NO_SAMPLING else 1
     wrf_classifier = RandomForestClassifier(class_weight={1: weight, 0: 1})
+    # wrf_classifier = GradientBoostingClassifier(
+    #     n_estimators=200,
+    #     learning_rate=0.05,
+    #     max_depth=3,
+    #     subsample=0.8
+    # )
     wrf_classifier.fit(X_train, y_train)
     y_pred = wrf_classifier.predict(X_test)
 
