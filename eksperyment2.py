@@ -23,15 +23,16 @@ from utils.ImageDataset import ImageDataset
 # =====================
 # CONFIG
 # =====================
-BALANCED = False
-EPOCHS = 10
+BALANCED = True
+EPOCHS = 20
 BATCH_SIZE = 32
 LR = 1e-3
-RESULTS_DIR = "results/resnet_imb"
+RESULTS_DIR = "results/resnet"
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
 
 # =====================
 # METRICS
