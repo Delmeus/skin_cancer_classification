@@ -20,9 +20,7 @@ from math import pi
 
 from utils.ImageDataset import ImageDataset
 
-# =====================
-# CONFIG
-# =====================
+
 BALANCED = True
 EPOCHS = 20
 BATCH_SIZE = 32
@@ -34,15 +32,11 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
-# =====================
-# METRICS
-# =====================
+
 metric_names = ["F1", "REC", "PREC", "ACC", "BAC", "GMEAN", "SPEC"]
 all_scores = {k: [] for k in metric_names}
 
-# =====================
-# DATASET
-# =====================
+
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -71,9 +65,7 @@ train_idx, val_idx = train_test_split(
 train_dataset = Subset(dataset, train_idx)
 val_dataset = Subset(dataset, val_idx)
 
-# =====================
-# SAMPLING
-# =====================
+
 if BALANCED:
     train_labels = labels[train_idx]
     class_counts = np.bincount(train_labels)
@@ -104,9 +96,6 @@ val_loader = DataLoader(
     shuffle=False
 )
 
-# =====================
-# MODEL
-# =====================
 model = models.resnet18(pretrained=True)
 
 for p in model.parameters():
@@ -115,15 +104,11 @@ for p in model.parameters():
 model.fc = nn.Linear(model.fc.in_features, 2)
 model = model.to(device)
 
-# =====================
-# LOSS & OPTIMIZER
-# =====================
+
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.fc.parameters(), lr=LR)
 
-# =====================
-# TRAINING LOOP
-# =====================
+
 for epoch in range(EPOCHS):
     model.train()
     running_loss = 0.0
@@ -141,9 +126,7 @@ for epoch in range(EPOCHS):
 
     avg_loss = running_loss / len(train_loader)
 
-    # =====================
-    # VALIDATION
-    # =====================
+
     model.eval()
     y_true, y_pred = [], []
 
@@ -156,9 +139,7 @@ for epoch in range(EPOCHS):
             y_pred.extend(preds)
             y_true.extend(targets.numpy())
 
-    # =====================
-    # METRICS
-    # =====================
+
     scores = {
         "F1": f1_score(y_true, y_pred),
         "REC": recall_score(y_true, y_pred),
@@ -177,9 +158,7 @@ for epoch in range(EPOCHS):
           f"F1: {scores['F1']:.3f} "
           f"REC: {scores['REC']:.3f}")
 
-# =====================
-# RADAR CHART
-# =====================
+
 def plot_radar(scores, title, path):
     labels = list(scores.keys())
     values = list(scores.values())
@@ -206,9 +185,7 @@ def plot_radar(scores, title, path):
     plt.savefig(path, dpi=200)
     plt.show()
 
-# =====================
-# FINAL RESULTS
-# =====================
+
 mean_scores = {k: np.mean(v) for k, v in all_scores.items()}
 
 mode = "balanced" if BALANCED else "imbalanced"
